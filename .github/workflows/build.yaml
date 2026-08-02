@@ -1,0 +1,48 @@
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Build Target'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - linux
+          - macos
+          - mingw
+          - windows
+          - android
+      release:
+        description: 'Create Release'
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  linux:
+    if: inputs.target == 'all' || inputs.target == 'linux'
+    uses: ./.github/workflows/linux.yml
+    secrets: inherit
+
+  macos:
+    if: inputs.target == 'all' || inputs.target == 'macos'
+    uses: ./.github/workflows/macos.yml
+    secrets: inherit
+
+  mingw:
+    if: inputs.target == 'all' || inputs.target == 'mingw'
+    uses: ./.github/workflows/mingw.yml
+    secrets: inherit
+
+  windows:
+    if: inputs.target == 'all' || inputs.target == 'windows'
+    uses: ./.github/workflows/windows.yml
+    secrets: inherit
+
+  android:
+    if: inputs.target == 'all' || inputs.target == 'android'
+    uses: ./.github/workflows/android.yml
+    secrets: inherit

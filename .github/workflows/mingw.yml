@@ -1,8 +1,7 @@
 name: mingw-w64
 
 on:
-  pull_request:
-  push:
+  workflow_call:
 
 jobs:
   vanilla_win_gcc:

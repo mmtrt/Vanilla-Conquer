@@ -1,8 +1,7 @@
 name: linux
 
 on:
-  pull_request:
-  push:
+  workflow_call:
 
 jobs:
   create_dev_release:

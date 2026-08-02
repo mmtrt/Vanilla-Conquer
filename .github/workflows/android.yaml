@@ -1,10 +1,7 @@
-name: Android
+name: android
 
 on:
-  push:
-    branches: [android, master, main]
-  pull_request:
-    branches: [android, master, main]
+  workflow_call:
 
 env:
   NDK_VERSION: r27c
