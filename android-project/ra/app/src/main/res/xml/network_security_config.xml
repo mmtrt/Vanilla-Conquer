@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Map packs are hosted on HTTP-only ra.afraid.org -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">ra.afraid.org</domain>
+        <domain includeSubdomains="true">afraid.org</domain>
+    </domain-config>
+</network-security-config>

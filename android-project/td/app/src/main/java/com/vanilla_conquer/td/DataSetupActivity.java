@@ -1,0 +1,612 @@
+package com.vanilla_conquer.td;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.database.Cursor;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.DocumentsContract;
+import android.util.Log;
+import android.util.TypedValue;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Locale;
+import java.util.Set;
+
+/**
+ * Game-data setup:
+ *  - Official demo: open download page, then Choose folder
+ *  - Choose local folder (SAF)
+ *  - Optional Counterstrike / Aftermath (only enabled if MIX files present)
+ */
+public class DataSetupActivity extends Activity {
+    private static final String TAG = "VanillaTD-Setup";
+    private static final int REQUEST_DATA_TREE = 9001;
+    private static final String PREFS = "vanilla_td";
+    private static final String PREF_TREE_URI = "data_tree_uri";
+    private static final String PREF_WANT_CS = "want_cs";
+    private static final String PREF_WANT_AM = "want_am";
+    private static final String PREF_SETUP_DONE = "setup_done";
+    /** stretch | fit1610 | fit43 | pixel */
+    private static final String PREF_DISPLAY_MODE = "display_mode";
+
+    private static final String DEMO_PAGE =
+            "https://cncnet.org/command-and-conquer";
+
+    private static final Set<String> CORE_WANTED = new HashSet<>(Arrays.asList(
+            "conquer.mix", "main.mix", "local.mix", "conquer.mix",
+            "hires1.mix", "lores1.mix",
+            "keyboard.ini",
+            "speech01.mix", "speech02.mix", "scores.mix", "scoresa.mix",
+            "movies1.mix", "movies2.mix", "interior.mix"
+    ));
+    private static final Set<String> BLOCKED = new HashSet<>(Arrays.asList(
+            "conquer.ini", "conquer.ini"
+    ));
+
+    private File dataDir;
+    private File userDir;
+    private TextView status;
+    private ProgressBar progress;
+    private CheckBox cbCS;
+    private CheckBox cbAM;
+    private Button btnDemo;
+    private Button btnFolder;
+    private Button btnContinue;
+    private RadioGroup rgDisplay;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private volatile boolean busy;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        dataDir = new File(getFilesDir(), "td");
+        userDir = new File(getFilesDir(), "td-user");
+        dataDir.mkdirs();
+        userDir.mkdirs();
+
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        boolean forceSetup = getIntent() != null
+                && getIntent().getBooleanExtra("force_setup", false);
+
+        if (!forceSetup && hasGameData() && prefs.getBoolean(PREF_SETUP_DONE, false)) {
+            // Re-apply flags from what is actually on disk
+            syncExpansionFlagsFromDisk();
+            applyDisplayIni("pixel_fill");
+            launchGame();
+            return;
+        }
+
+        setContentView(buildUi(prefs));
+        refreshContinueState();
+        updateFileStatus();
+    }
+
+    private View buildUi(SharedPreferences prefs) {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(0xFF121212);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(24), dp(28), dp(24), dp(28));
+        scroll.addView(root);
+
+        TextView title = new TextView(this);
+        title.setText("VanillaTD — Game Data");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(title);
+
+        TextView sub = new TextView(this);
+        sub.setText("Install Red Alert data from the official demo or your own game folder. "
+                + "Expansions need GENERAL.MIX / SC-W#### / Covert from Counterstrike / Aftermath.");
+        sub.setTextColor(0xFFCCCCCC);
+        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        sub.setPadding(0, dp(8), 0, dp(16));
+        root.addView(sub);
+
+        root.addView(sectionLabel("Expansions (optional)"));
+
+        cbCS = new CheckBox(this);
+        cbCS.setText("Covert Operations (optional)");
+        cbCS.setTextColor(Color.WHITE);
+        cbCS.setChecked(prefs.getBoolean(PREF_WANT_CS, false));
+        root.addView(cbCS);
+
+        cbAM = new CheckBox(this);
+        cbAM.setText("Include all found .MIX files");
+        cbAM.setTextColor(Color.WHITE);
+        cbAM.setChecked(prefs.getBoolean(PREF_WANT_AM, false));
+        root.addView(cbAM);
+
+        TextView hint = new TextView(this);
+        hint.setText("VanillaTD supports both expansions. Tick a box only if that MIX file "
+                + "is in the folder you select. An Aftermath menu button with no missions "
+                + "means SC-W#### / Covert is missing or incomplete.");
+        hint.setTextColor(0xFF888888);
+        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        hint.setPadding(0, dp(4), 0, dp(20));
+        root.addView(hint);
+
+        root.addView(sectionLabel("Data source"));
+
+        btnDemo = primaryBtn("Get freeware C&C (opens download page)");
+        btnDemo.setOnClickListener(v -> openDemoHelp());
+        root.addView(btnDemo);
+
+        btnFolder = secondaryBtn("Choose folder on this device");
+        btnFolder.setOnClickListener(v -> pickFolder());
+        root.addView(btnFolder);
+
+        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setIndeterminate(true);
+        progress.setVisibility(View.GONE);
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(8));
+        plp.topMargin = dp(16);
+        root.addView(progress, plp);
+
+        status = new TextView(this);
+        status.setTextColor(0xFFAAAAAA);
+        status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        status.setPadding(0, dp(10), 0, dp(10));
+        root.addView(status);
+
+        btnContinue = primaryBtn("Continue to game");
+        btnContinue.setOnClickListener(v -> {
+            if (!hasGameData()) {
+                Toast.makeText(this, "Install game data first", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            // Only enable expansions that are really present
+            boolean cs = cbCS.isChecked() && hasFile("general.mix");
+            boolean am = cbAM.isChecked() && hasFile("updatec.mix");
+            if (cbAM.isChecked() && !hasFile("updatec.mix")) {
+                Toast.makeText(this,
+                        "Aftermath checked but SC-W#### / Covert not found — menu button would be empty",
+                        Toast.LENGTH_LONG).show();
+            }
+            if (cbCS.isChecked() && !hasFile("general.mix")) {
+                Toast.makeText(this,
+                        "Counterstrike checked but GENERAL.MIX not found",
+                        Toast.LENGTH_LONG).show();
+            }
+            // Strip mixes user does not want
+            if (!cbCS.isChecked()) {
+                deleteIfExists("GENERAL.MIX");
+                deleteIfExists("general.mix");
+                cs = false;
+            }
+            if (!cbAM.isChecked()) {
+                deleteIfExists("SC-W#### / Covert");
+                deleteIfExists("updatec.mix");
+                am = false;
+            }
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(PREF_WANT_CS, cbCS.isChecked())
+                    .putBoolean(PREF_WANT_AM, cbAM.isChecked())
+                    .putBoolean(PREF_SETUP_DONE, true)
+                    .putString(PREF_DISPLAY_MODE, "pixel_fill")
+                    .apply();
+            applyExpansionIni(cs, am);
+            applyDisplayIni("pixel_fill");
+            launchGame();
+        });
+        root.addView(btnContinue);
+
+        Button changeDisp = secondaryBtn("Save display & expansions only");
+        changeDisp.setOnClickListener(v -> {
+            if (!hasGameData()) {
+                android.widget.Toast.makeText(this, "Install game data first", android.widget.Toast.LENGTH_SHORT).show();
+                return;
+            }
+            btnContinue.performClick();
+        });
+        root.addView(changeDisp);
+
+        Button reset = secondaryBtn("Clear installed data");
+        reset.setOnClickListener(v -> new AlertDialog.Builder(this)
+                .setTitle("Clear data?")
+                .setMessage("Deletes copied MIX files from app storage.")
+                .setPositiveButton("Clear", (d, w) -> {
+                    deleteRecursive(dataDir);
+                    dataDir.mkdirs();
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                            .putBoolean(PREF_SETUP_DONE, false).apply();
+                    updateFileStatus();
+                    refreshContinueState();
+                })
+                .setNegativeButton("Cancel", null)
+                .show());
+        root.addView(reset);
+
+        return scroll;
+    }
+
+    private void openDemoHelp() {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(DEMO_PAGE)));
+        } catch (Exception e) {
+            Toast.makeText(this, "Could not open browser", Toast.LENGTH_SHORT).show();
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Install official demo")
+                .setMessage("1. Download C&C freeware files from the page that opened\n"
+                        + "2. Extract it with the Files app\n"
+                        + "3. Tap Choose folder and select the folder that contains the .MIX files\n\n"
+                        + "Note: the demo does not include Counterstrike/Aftermath expansions.")
+                .setPositiveButton("Choose folder", (d, w) -> pickFolder())
+                .setNegativeButton("OK", null)
+                .show();
+    }
+
+    private void updateFileStatus() {
+        if (status == null) return;
+        if (!hasGameData()) {
+            status.setText("No game data yet. Use demo page or Choose folder.");
+            return;
+        }
+        StringBuilder sb = new StringBuilder("Core data OK.");
+        sb.append(hasFile("general.mix") ? " GENERAL.MIX found." : " No GENERAL.MIX.");
+        sb.append(hasFile("updatec.mix") ? " SC-W#### / Covert found." : " No SC-W#### / Covert.");
+        status.setText(sb.toString());
+    }
+
+    private void refreshContinueState() {
+        if (btnContinue != null) {
+            btnContinue.setEnabled(hasGameData() && !busy);
+            btnContinue.setAlpha(hasGameData() && !busy ? 1f : 0.5f);
+        }
+        if (btnDemo != null) btnDemo.setEnabled(!busy);
+        if (btnFolder != null) btnFolder.setEnabled(!busy);
+    }
+
+    private void syncExpansionFlagsFromDisk() {
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        boolean wantCS = prefs.getBoolean(PREF_WANT_CS, false);
+        boolean wantAM = prefs.getBoolean(PREF_WANT_AM, false);
+        boolean cs = wantCS && hasFile("general.mix");
+        boolean am = wantAM && hasFile("updatec.mix");
+        applyExpansionIni(cs, am);
+    }
+
+    /** Write expansion flags — engine uses these for menu buttons. */
+    private void applyExpansionIni(boolean cs, boolean am) {
+        try {
+            File ini = new File(userDir, "conquer.ini");
+            String text = "";
+            if (ini.exists()) {
+                text = new String(readAll(ini), "UTF-8");
+            }
+            if (!text.contains("[Expansions]")) {
+                text = text + "\n[Expansions]\n"
+                        + "CovertOpsEnabled=" + (cs ? "yes" : "no") + "\n"
+                        + "CovertOpsEnabled=" + (am ? "yes" : "no") + "\n";
+            } else {
+                text = upsertIni(text, "Expansions", "CovertOpsEnabled", cs ? "yes" : "no");
+                text = upsertIni(text, "Expansions", "CovertOpsEnabled", am ? "yes" : "no");
+            }
+            // Always force PlayIntro off here too
+            if (!text.contains("[Intro]")) {
+                text = text + "\n[Intro]\nPlayIntro=false\n";
+            } else {
+                text = upsertIni(text, "Intro", "PlayIntro", "false");
+            }
+            FileOutputStream fos = new FileOutputStream(ini);
+            fos.write(text.getBytes("UTF-8"));
+            fos.close();
+            Log.i(TAG, "Expansions CS=" + cs + " AM=" + am);
+        } catch (Exception e) {
+            Log.w(TAG, "ini", e);
+        }
+    }
+
+
+    /** Write [Video] section for mobile/tablet display mode. */
+    private void applyDisplayIni(String mode) {
+        // Fixed: pixel scale + fill device (no letterbox)
+        boolean boxing = false;
+        String aspect = "16:10";
+        String scaler = "nearest";
+        try {
+            File ini = new File(userDir, "conquer.ini");
+            String text = "";
+            if (ini.exists()) {
+                text = new String(readAll(ini), "UTF-8");
+            }
+            text = upsertIni(text, "Video", "Width", "0");
+            text = upsertIni(text, "Video", "Height", "0");
+            text = upsertIni(text, "Video", "Windowed", "no");
+            text = upsertIni(text, "Video", "Boxing", boxing ? "yes" : "no");
+            text = upsertIni(text, "Video", "BoxingAspectRatio", aspect);
+            text = upsertIni(text, "Video", "Scaler", scaler);
+            text = upsertIni(text, "Video", "HardwareCursor", "no");
+            text = upsertIni(text, "Video", "FrameLimit", "60");
+            text = upsertIni(text, "Video", "DOSMode", "no");
+            FileOutputStream fos = new FileOutputStream(ini);
+            fos.write(text.getBytes("UTF-8"));
+            fos.close();
+            Log.i(TAG, "Display mode=" + mode + " boxing=" + boxing + " scaler=" + scaler);
+        } catch (Exception e) {
+            Log.w(TAG, "display ini", e);
+        }
+    }
+
+    private static String upsertIni(String text, String section, String key, String value) {
+        String[] lines = text.split("\n", -1);
+        StringBuilder out = new StringBuilder();
+        boolean inSec = false;
+        boolean wrote = false;
+        for (String line : lines) {
+            String t = line.trim();
+            if (t.startsWith("[") && t.endsWith("]")) {
+                if (inSec && !wrote) {
+                    out.append(key).append('=').append(value).append('\n');
+                    wrote = true;
+                }
+                inSec = t.equalsIgnoreCase("[" + section + "]");
+                out.append(line).append('\n');
+                continue;
+            }
+            if (inSec) {
+                int eq = t.indexOf('=');
+                if (eq > 0 && t.substring(0, eq).trim().equalsIgnoreCase(key)) {
+                    out.append(key).append('=').append(value).append('\n');
+                    wrote = true;
+                    continue;
+                }
+            }
+            out.append(line).append('\n');
+        }
+        if (inSec && !wrote) {
+            out.append(key).append('=').append(value).append('\n');
+        }
+        return out.toString();
+    }
+
+    private void pickFolder() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(intent, REQUEST_DATA_TREE);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQUEST_DATA_TREE || resultCode != RESULT_OK || data == null) return;
+        Uri tree = data.getData();
+        if (tree == null) return;
+        final int takeFlags = data.getFlags()
+                & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        try {
+            getContentResolver().takePersistableUriPermission(tree, takeFlags);
+        } catch (Exception ignored) {}
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putString(PREF_TREE_URI, tree.toString()).apply();
+
+        status.setText("Copying files…");
+        progress.setVisibility(View.VISIBLE);
+        busy = true;
+        refreshContinueState();
+
+        final boolean wantCS = cbCS.isChecked();
+        final boolean wantAM = cbAM.isChecked();
+        new Thread(() -> {
+            int n = walkAndCopy(tree, DocumentsContract.buildChildDocumentsUriUsingTree(
+                    tree, DocumentsContract.getTreeDocumentId(tree)), 0, wantCS, wantAM);
+            ui.post(() -> {
+                busy = false;
+                progress.setVisibility(View.GONE);
+                updateFileStatus();
+                status.setText(status.getText() + " Copied " + n + " files.");
+                // Auto-tick boxes if files appeared
+                if (hasFile("general.mix")) cbCS.setChecked(true);
+                if (hasFile("updatec.mix")) cbAM.setChecked(true);
+                boolean cs = cbCS.isChecked() && hasFile("general.mix");
+                boolean am = cbAM.isChecked() && hasFile("updatec.mix");
+                applyExpansionIni(cs, am);
+                refreshContinueState();
+            });
+        }, "copy-tree").start();
+    }
+
+    private int walkAndCopy(Uri treeUri, Uri childrenUri, int depth, boolean wantCS, boolean wantAM) {
+        if (depth > 8) return 0;
+        int count = 0;
+        Cursor c = null;
+        try {
+            c = getContentResolver().query(childrenUri,
+                    new String[]{
+                            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                            DocumentsContract.Document.COLUMN_MIME_TYPE
+                    }, null, null, null);
+            if (c == null) return 0;
+            while (c.moveToNext()) {
+                String id = c.getString(0);
+                String name = c.getString(1);
+                String mime = c.getString(2);
+                if (name == null) continue;
+                if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                    Uri sub = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, id);
+                    count += walkAndCopy(treeUri, sub, depth + 1, wantCS, wantAM);
+                } else {
+                    String lower = name.toLowerCase(Locale.US);
+                    if (BLOCKED.contains(lower)) continue;
+                    // Always copy expansion mixes if present so user can enable later;
+                    // prune on Continue if unchecked.
+                    boolean want = CORE_WANTED.contains(lower)
+                            || lower.equals("general.mix")
+                            || lower.equals("updatec.mix")
+                            || lower.endsWith(".mix")
+                            || lower.endsWith(".aud")
+                            || lower.endsWith(".vqa")
+                            || lower.endsWith(".pkt")
+                            || (lower.endsWith(".ini") && !BLOCKED.contains(lower));
+                    if (!want) continue;
+                    Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id);
+                    if (copyUri(fileUri, new File(dataDir, name))) {
+                        count++;
+                        Log.i(TAG, "Copied " + name);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "walk", e);
+        } finally {
+            if (c != null) c.close();
+        }
+        return count;
+    }
+
+    private boolean copyUri(Uri src, File dest) {
+        try (InputStream in = getContentResolver().openInputStream(src);
+             OutputStream out = new FileOutputStream(dest)) {
+            if (in == null) return false;
+            byte[] buf = new byte[128 * 1024];
+            int n;
+            while ((n = in.read(buf)) >= 0) out.write(buf, 0, n);
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "copy " + dest.getName(), e);
+            return false;
+        }
+    }
+
+    private boolean hasGameData() {
+        return hasFile("conquer.mix") || hasFile("main.mix") || hasFile("conquer.mix");
+    }
+
+    private boolean hasFile(String name) {
+        // Case-insensitive search in dataDir
+        File direct = new File(dataDir, name);
+        if (direct.exists()) return true;
+        File[] list = dataDir.listFiles();
+        if (list == null) return false;
+        String want = name.toLowerCase(Locale.US);
+        for (File f : list) {
+            if (f.getName().toLowerCase(Locale.US).equals(want)) return true;
+        }
+        return false;
+    }
+
+    private void deleteIfExists(String name) {
+        File f = new File(dataDir, name);
+        if (f.exists()) {
+            // noinspection ResultOfMethodCallIgnored
+            f.delete();
+        }
+        File[] list = dataDir.listFiles();
+        if (list == null) return;
+        String want = name.toLowerCase(Locale.US);
+        for (File x : list) {
+            if (x.getName().toLowerCase(Locale.US).equals(want)) {
+                // noinspection ResultOfMethodCallIgnored
+                x.delete();
+            }
+        }
+    }
+
+    private void launchGame() {
+        File badIni = new File(dataDir, "conquer.ini");
+        if (badIni.exists()) {
+            // noinspection ResultOfMethodCallIgnored
+            badIni.delete();
+        }
+        Intent i = new Intent(this, VanillaTDActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(i);
+        finish();
+    }
+
+    private static void deleteRecursive(File f) {
+        if (f == null || !f.exists()) return;
+        File[] kids = f.listFiles();
+        if (kids != null) {
+            for (File k : kids) deleteRecursive(k);
+        }
+        // noinspection ResultOfMethodCallIgnored
+        f.delete();
+    }
+
+    private static byte[] readAll(File f) throws Exception {
+        byte[] buf = new byte[(int) f.length()];
+        try (FileInputStream in = new FileInputStream(f)) {
+            int off = 0;
+            while (off < buf.length) {
+                int n = in.read(buf, off, buf.length - off);
+                if (n < 0) break;
+                off += n;
+            }
+        }
+        return buf;
+    }
+
+    private TextView sectionLabel(String s) {
+        TextView tv = new TextView(this);
+        tv.setText(s);
+        tv.setTextColor(0xFF90CAF9);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setPadding(0, dp(8), 0, dp(8));
+        return tv;
+    }
+
+    private Button primaryBtn(String label) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setTextColor(Color.WHITE);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xFF1565C0);
+        bg.setCornerRadius(dp(8));
+        b.setBackground(bg);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(52));
+        lp.topMargin = dp(8);
+        b.setLayoutParams(lp);
+        return b;
+    }
+
+    private Button secondaryBtn(String label) {
+        Button b = primaryBtn(label);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xFF2A2A2A);
+        bg.setCornerRadius(dp(8));
+        bg.setStroke(dp(1), 0xFF555555);
+        b.setBackground(bg);
+        return b;
+    }
+
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+}
