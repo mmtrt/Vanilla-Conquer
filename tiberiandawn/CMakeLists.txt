@@ -215,7 +215,15 @@ if(BUILD_VANILLATD)
     endif()
 
     # A target must include the icon for the custom command to run.
-    add_executable(VanillaTD ${TIBDAWN_SRC} ${TIBDAWN_NET_SRC} ${TIBDAWN_HEADERS} ${VANILLATD_RC} ${VANILLATD_ICON})
+    if(ANDROID)
+        # On Android, SDLActivity loads a shared library named "main".
+        add_library(VanillaTD SHARED ${TIBDAWN_SRC} ${TIBDAWN_NET_SRC} ${TIBDAWN_HEADERS})
+        set_target_properties(VanillaTD PROPERTIES OUTPUT_NAME main)
+        target_link_options(VanillaTD PRIVATE -Wl,--export-dynamic)
+    else()
+        add_executable(VanillaTD ${TIBDAWN_SRC} ${TIBDAWN_NET_SRC} ${TIBDAWN_HEADERS} ${VANILLATD_RC} ${VANILLATD_ICON})
+        set_target_properties(VanillaTD PROPERTIES OUTPUT_NAME vanillatd)
+    endif()
 
     if(MAKE_BUNDLE)
         set_source_files_properties(${VANILLATD_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
@@ -232,8 +240,7 @@ if(BUILD_VANILLATD)
 
     target_compile_definitions(VanillaTD PUBLIC $<$<CONFIG:Debug>:_DEBUG> ${VANILLA_DEFS} MEGAMAPS)
     target_include_directories(VanillaTD PUBLIC ${CMAKE_SOURCE_DIR} .)
-    target_link_libraries(VanillaTD commonv ${VANILLA_LIBS} ${STATIC_LIBS})
-    set_target_properties(VanillaTD PROPERTIES OUTPUT_NAME vanillatd)
+    target_link_libraries(VanillaTD commonv ${VANILLA_LIBS} ${STATIC_LIBS})   
     if(MAP_EDITORTD)
         target_compile_definitions(VanillaTD PUBLIC INTERNAL_VERSION)
     endif()
