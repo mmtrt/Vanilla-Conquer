@@ -1,0 +1,206 @@
+name: Android
+
+on:
+  push:
+    branches: [android, master, main]
+  pull_request:
+    branches: [android, master, main]
+
+env:
+  NDK_VERSION: r27c
+  SDL2_VERSION: 2.30.9
+  OPENAL_VERSION: 1.23.1
+  # Match your local setup. Change to c++_shared if you ever need it.
+  ANDROID_STL: c++_static
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        abi: [arm64-v8a]
+        platform: [android-24]
+        build_type: [Release]
+
+    steps:
+      # ─── 1. Checkout ─────────────────────────────────────────────
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      # ─── 2. Java + Android SDK ───────────────────────────────────
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install SDK build-tools
+        run: sdkmanager "build-tools;34.0.0" "platforms;android-34"
+
+      # ─── 3. NDK ──────────────────────────────────────────────────
+      - name: Cache NDK
+        id: ndk-cache
+        uses: actions/cache@v4
+        with:
+          path: android-ndk-${{ env.NDK_VERSION }}
+          key: ndk-${{ env.NDK_VERSION }}
+
+      - name: Download NDK
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
+          unzip -q android-ndk-${NDK_VERSION}-linux.zip
+
+      - name: Export NDK path
+        run: |
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+          echo "ANDROID_STL=${{ env.ANDROID_STL }}" >> $GITHUB_ENV
+
+      # ─── 4. Download sources ─────────────────────────────────────
+      - name: Download SDL2
+        run: |
+          wget -q https://github.com/libsdl-org/SDL/releases/download/release-${SDL2_VERSION}/SDL2-${SDL2_VERSION}.tar.gz
+          tar xf SDL2-${SDL2_VERSION}.tar.gz
+          mv SDL2-${SDL2_VERSION} SDL2
+
+      - name: Download OpenAL Soft
+        run: |
+          wget -q https://github.com/kcat/openal-soft/archive/refs/tags/${OPENAL_VERSION}.tar.gz
+          tar xf ${OPENAL_VERSION}.tar.gz
+          mv openal-soft-${OPENAL_VERSION} openal-soft
+
+      # ─── 5. Build SDL2 ───────────────────────────────────────────
+      - name: Cache SDL2 install
+        id: sdl2-cache
+        uses: actions/cache@v4
+        with:
+          path: sdl2-install
+          key: sdl2-${{ matrix.abi }}-${{ env.SDL2_VERSION }}-${{ matrix.platform }}-${{ matrix.build_type }}-${{ env.ANDROID_STL }}
+
+      - name: Build SDL2
+        if: steps.sdl2-cache.outputs.cache-hit != 'true'
+        run: |
+          cmake -S SDL2 -B build-sdl2 \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=${{ matrix.platform }} \
+            -DANDROID_STL=${{ env.ANDROID_STL }} \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DSDL_SHARED=ON \
+            -DSDL_STATIC=OFF \
+            -DCMAKE_INSTALL_PREFIX=$PWD/sdl2-install
+          cmake --build build-sdl2 -j$(nproc)
+          cmake --install build-sdl2
+
+      # ─── 6. Build OpenAL Soft ────────────────────────────────────
+      - name: Cache OpenAL install
+        id: openal-cache
+        uses: actions/cache@v4
+        with:
+          path: openal-install
+          key: openal-${{ matrix.abi }}-${{ env.OPENAL_VERSION }}-${{ matrix.platform }}-${{ matrix.build_type }}-${{ env.ANDROID_STL }}
+
+      - name: Build OpenAL Soft
+        if: steps.openal-cache.outputs.cache-hit != 'true'
+        run: |
+          cmake -S openal-soft -B build-openal \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=${{ matrix.platform }} \
+            -DANDROID_STL=${{ env.ANDROID_STL }} \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DALSOFT_UTILS=OFF \
+            -DALSOFT_EXAMPLES=OFF \
+            -DALSOFT_BACKEND_OPENSL=ON \
+            -DCMAKE_INSTALL_PREFIX=$PWD/openal-install
+          cmake --build build-openal -j$(nproc)
+          cmake --install build-openal
+
+      # ─── 7. Build Vanilla-Conquer ──────────────────────────────────
+      - name: Build Vanilla-Conquer
+        run: |
+          cmake -S . -B build-android \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=${{ matrix.platform }} \
+            -DANDROID_STL=${{ env.ANDROID_STL }} \
+            -DSDL2=ON \
+            -DOPENAL=ON \
+            -DBUILD_VANILLARA=ON \
+            -DBUILD_VANILLATD=OFF \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DSDL2_ROOT_DIR=$PWD/sdl2-install \
+            -DOPENAL_ROOT=$PWD/openal-install \
+            -DCMAKE_FIND_ROOT_PATH="$PWD/sdl2-install;$PWD/openal-install"
+          cmake --build build-android -j$(nproc)
+
+      # ─── 8. Stage .so files ──────────────────────────────────────
+      - name: Stage native libraries
+        run: |
+          JNI_DIR="android-project/app/src/main/jniLibs/${{ matrix.abi }}"
+          mkdir -p "$JNI_DIR"
+
+          # Engine
+          cp build-android/redalert/libmain.so "$JNI_DIR/"
+
+          # SDL2
+          cp sdl2-install/lib/libSDL2.so "$JNI_DIR/"
+
+          # OpenAL Soft (resolve versioned .so, e.g. libopenal.so.1.23.1)
+          OPENAL_REAL=$(find openal-install/lib -maxdepth 1 -name 'libopenal.so*' -not -type l | head -n1)
+          if [ -z "$OPENAL_REAL" ]; then
+            echo "ERROR: real libopenal.so not found in openal-install/lib" >&2
+            ls -la openal-install/lib/ >&2
+            exit 1
+          fi
+          cp "$OPENAL_REAL" "$JNI_DIR/libopenal.so"
+
+          # ── Auto-detect libc++_shared.so requirement ──
+          # If any staged .so lists libc++_shared.so as a NEEDED dependency, copy it.
+          READELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          NEEDS_CXX_SHARED=false
+          for so in "$JNI_DIR"/*.so; do
+            if $READELF -d "$so" 2>/dev/null | grep -q 'libc++_shared.so'; then
+              NEEDS_CXX_SHARED=true
+              echo "Detected libc++_shared.so dependency in $(basename $so)"
+            fi
+          done
+
+          if [ "$NEEDS_CXX_SHARED" = true ]; then
+            case "${{ matrix.abi }}" in
+              arm64-v8a)   TRIPLE=aarch64-linux-android ;;
+              armeabi-v7a) TRIPLE=arm-linux-androideabi ;;
+              x86_64)      TRIPLE=x86_64-linux-android ;;
+              x86)         TRIPLE=i686-linux-android ;;
+            esac
+            cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$TRIPLE/libc++_shared.so" "$JNI_DIR/"
+            echo "Copied libc++_shared.so"
+          else
+            echo "No libc++_shared.so dependency detected; skipping"
+          fi
+
+          echo "=== Staged libraries ==="
+          ls -la "$JNI_DIR/"
+
+      # ─── 9. Build APK ──────────────────────────────────────────
+      - name: Build APK
+        run: |
+          cd android-project
+          chmod +x gradlew
+          ./gradlew assembleRelease
+
+      # ─── 10. Upload artifacts ────────────────────────────────────
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: vanillara-android-${{ matrix.abi }}
+          path: android-project/app/build/outputs/apk/release/*.apk
+
+      - name: Upload native libs
+        uses: actions/upload-artifact@v4
+        with:
+          name: vanillara-native-libs-${{ matrix.abi }}
+          path: android-project/app/src/main/jniLibs/
