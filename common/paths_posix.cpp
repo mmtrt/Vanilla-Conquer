@@ -179,15 +179,21 @@ const char* PathsClass::Program_Path()
 const char* PathsClass::Data_Path()
 {
     if (DataPath.empty()) {
-        if (ProgramPath.empty()) {
-            // Init the program path first if it hasn't been done already.
-            Program_Path();
-        }
+        // Android / portable override: allow forcing the data directory via env.
+        const char* env_data = std::getenv("VANILLA_DATA_PATH");
+        if (env_data != nullptr && env_data[0] != '\0') {
+            DataPath = env_data;
+        } else {
+            if (ProgramPath.empty()) {
+                // Init the program path first if it hasn't been done already.
+                Program_Path();
+            }
 
-        DataPath = ProgramPath.substr(0, ProgramPath.find_last_of("/")) + SEP + "share";
+            DataPath = ProgramPath.substr(0, ProgramPath.find_last_of("/")) + SEP + "share";
 
-        if (!Suffix.empty()) {
-            DataPath += SEP + Suffix;
+            if (!Suffix.empty()) {
+                DataPath += SEP + Suffix;
+            }
         }
     }
 
@@ -197,14 +203,19 @@ const char* PathsClass::Data_Path()
 const char* PathsClass::User_Path()
 {
     if (UserPath.empty()) {
-#ifdef __APPLE__
-        UserPath = User_Home() + "/Library/Application Support/Vanilla-Conquer";
-#else
-        UserPath = Get_Posix_Default("XDG_CONFIG_HOME", ".config") + "/vanilla-conquer";
-#endif
+        const char* env_user = std::getenv("VANILLA_USER_PATH");
+        if (env_user != nullptr && env_user[0] != '\0') {
+            UserPath = env_user;
+        } else {
+            #ifdef __APPLE__
+            UserPath = User_Home() + "/Library/Application Support/Vanilla-Conquer";
+            #else
+            UserPath = Get_Posix_Default("XDG_CONFIG_HOME", ".config") + "/vanilla-conquer";
+            #endif
 
-        if (!Suffix.empty()) {
-            UserPath += SEP + Suffix;
+            if (!Suffix.empty()) {
+                UserPath += SEP + Suffix;
+            }
         }
 
         Create_Directory(UserPath.c_str());
