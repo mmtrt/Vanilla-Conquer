@@ -1,0 +1,257 @@
+# Vanilla-Conquer Android CI
+# Layout:
+#   android-project/ra          — Red Alert APK
+#   android-project/td          — Tiberian Dawn APK
+#   android-project/signing     — shared debug keystore + signing.gradle
+# Natives are built with NDK, staged into each app's jniLibs, then Gradle assembleRelease
+# (signed via signing/signing.gradle with debug keys).
+
+name: android
+
+on:
+  pull_request:
+  push:
+
+env:
+  NDK_VERSION: r27c
+  SDL2_VERSION: 2.32.10
+  OPENAL_VERSION: 1.23.1
+  ANDROID_STL: c++_static
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        abi: [arm64-v8a]
+        platform: [android-24]
+        build_type: [Release]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install SDK build-tools
+        run: sdkmanager "build-tools;34.0.0" "platforms;android-34"
+
+      - name: Cache NDK
+        id: ndk-cache
+        uses: actions/cache@v4
+        with:
+          path: android-ndk-${{ env.NDK_VERSION }}
+          key: ndk-${{ env.NDK_VERSION }}
+
+      - name: Download NDK
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
+          unzip -q android-ndk-${NDK_VERSION}-linux.zip
+
+      - name: Export NDK path
+        run: |
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+          echo "ANDROID_STL=${{ env.ANDROID_STL }}" >> $GITHUB_ENV
+
+      - name: Download SDL2
+        run: |
+          wget -q https://github.com/libsdl-org/SDL/releases/download/release-${SDL2_VERSION}/SDL2-${SDL2_VERSION}.tar.gz
+          tar xf SDL2-${SDL2_VERSION}.tar.gz
+          mv SDL2-${SDL2_VERSION} SDL2
+
+      - name: Download OpenAL Soft
+        run: |
+          wget -q https://github.com/kcat/openal-soft/archive/refs/tags/${OPENAL_VERSION}.tar.gz
+          tar xf ${OPENAL_VERSION}.tar.gz
+          mv openal-soft-${OPENAL_VERSION} openal-soft
+
+      - name: Cache SDL2 install
+        id: sdl2-cache
+        uses: actions/cache@v4
+        with:
+          path: sdl2-install
+          key: sdl2-${{ matrix.abi }}-${{ env.SDL2_VERSION }}-${{ matrix.platform }}-${{ matrix.build_type }}-${{ env.ANDROID_STL }}
+
+      - name: Build SDL2
+        if: steps.sdl2-cache.outputs.cache-hit != 'true'
+        run: |
+          cmake -S SDL2 -B build-sdl2 \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=${{ matrix.platform }} \
+            -DANDROID_STL=${{ env.ANDROID_STL }} \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DSDL_SHARED=ON \
+            -DSDL_STATIC=OFF \
+            -DSDL_TEST=OFF \
+            -DCMAKE_INSTALL_PREFIX=$PWD/sdl2-install
+          cmake --build build-sdl2 -j$(nproc)
+          cmake --install build-sdl2
+
+      - name: Cache OpenAL install
+        id: openal-cache
+        uses: actions/cache@v4
+        with:
+          path: openal-install
+          key: openal-${{ matrix.abi }}-${{ env.OPENAL_VERSION }}-${{ matrix.platform }}-${{ matrix.build_type }}-${{ env.ANDROID_STL }}
+
+      - name: Build OpenAL Soft
+        if: steps.openal-cache.outputs.cache-hit != 'true'
+        run: |
+          cmake -S openal-soft -B build-openal \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=${{ matrix.platform }} \
+            -DANDROID_STL=${{ env.ANDROID_STL }} \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DALSOFT_UTILS=OFF \
+            -DALSOFT_EXAMPLES=OFF \
+            -DALSOFT_BACKEND_OPENSL=ON \
+            -DCMAKE_INSTALL_PREFIX=$PWD/openal-install
+          cmake --build build-openal -j$(nproc)
+          cmake --install build-openal
+
+      # Engine: shared libmain.so targets (ANDROID add_library patches in tree)
+      - name: Build Vanilla-Conquer (RA + TD)
+        run: |
+          cmake -S . -B build-android \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=${{ matrix.platform }} \
+            -DANDROID_STL=${{ env.ANDROID_STL }} \
+            -DSDL2=ON \
+            -DOPENAL=ON \
+            -DBUILD_VANILLARA=ON \
+            -DBUILD_VANILLATD=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_TOOLS=OFF \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DSDL2_ROOT_DIR=$PWD/sdl2-install \
+            -DOPENAL_ROOT=$PWD/openal-install \
+            -DCMAKE_FIND_ROOT_PATH="$PWD/sdl2-install;$PWD/openal-install" \
+            -DCMAKE_PREFIX_PATH="$PWD/sdl2-install;$PWD/openal-install"
+          cmake --build build-android -j$(nproc)
+
+      - name: Stage native libraries into android-project
+        run: |
+          set -euo pipefail
+          READELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          STRIP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          ABI="${{ matrix.abi }}"
+
+          # Explicit strip for release .so size (matches lean CI APKs).
+          # --strip-unneeded : drop symbols not needed for relocation
+          # -g / --strip-debug : drop DWARF debug info if still present
+          strip_so() {
+            local f="$1"
+            local before after
+            before=$(stat -c%s "$f")
+            # 1) Remove unneeded non-alloc symbols
+            "$STRIP" --strip-unneeded "$f"
+            # 2) Remove remaining debug sections (safe for shipped JNI libs)
+            "$STRIP" --strip-debug "$f" 2>/dev/null || true
+            after=$(stat -c%s "$f")
+            echo "strip $(basename "$f"): ${before} -> ${after} bytes"
+          }
+
+          stage_game() {
+            local game="$1"   # ra | td
+            local libmain="$2"
+            local jni="android-project/${game}/app/src/main/jniLibs/${ABI}"
+            mkdir -p "$jni"
+            rm -f "$jni"/*.so "$jni"/*.temp-stream-* 2>/dev/null || true
+
+            cp "$libmain" "$jni/libmain.so"
+            cp sdl2-install/lib/libSDL2.so "$jni/libSDL2.so"
+
+            local openal_real
+            openal_real=$(find openal-install/lib -maxdepth 1 -name 'libopenal.so*' ! -type l | head -n1)
+            if [ -z "$openal_real" ]; then
+              echo "ERROR: libopenal.so not found" >&2
+              ls -la openal-install/lib/ >&2
+              exit 1
+            fi
+            cp "$openal_real" "$jni/libopenal.so"
+
+            local needs_cxx=false
+            for so in "$jni"/libmain.so "$jni"/libSDL2.so "$jni"/libopenal.so; do
+              strip_so "$so"
+              if "$READELF" -d "$so" 2>/dev/null | grep -q 'libc++_shared.so'; then
+                needs_cxx=true
+                echo "libc++_shared needed by $(basename "$so")"
+              fi
+            done
+            if [ "$needs_cxx" = true ]; then
+              case "$ABI" in
+                arm64-v8a)   TRIPLE=aarch64-linux-android ;;
+                armeabi-v7a) TRIPLE=arm-linux-androideabi ;;
+                x86_64)      TRIPLE=x86_64-linux-android ;;
+                x86)         TRIPLE=i686-linux-android ;;
+              esac
+              cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$TRIPLE/libc++_shared.so" "$jni/"
+              strip_so "$jni/libc++_shared.so"
+            fi
+            echo "=== ${game} jniLibs/${ABI} ==="
+            ls -la "$jni/"
+          }
+
+          stage_game ra build-android/redalert/libmain.so
+          stage_game td build-android/tiberiandawn/libmain.so
+
+      - name: Ensure signing keystore
+        run: |
+          mkdir -p android-project/signing
+          if [ ! -f android-project/signing/debug.keystore ]; then
+            keytool -genkeypair \
+              -keystore android-project/signing/debug.keystore \
+              -storepass android -keypass android \
+              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Vanilla Conquer Android,O=VanillaConquer,C=US"
+          fi
+          # signing.gradle is part of the tree; verify present
+          test -f android-project/signing/signing.gradle
+
+      - name: Build RA APK
+        run: |
+          cd android-project/ra
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          # Gradle signs via android-project/signing/signing.gradle → app-release.apk
+          OUT=$(find app/build/outputs/apk/release -name '*.apk' ! -name '*unsigned*' | head -n1)
+          if [ -z "$OUT" ]; then
+            OUT=$(find app/build/outputs/apk/release -name '*.apk' | head -n1)
+          fi
+          cp "$OUT" app/build/outputs/apk/release/vanillara.apk
+          ls -la app/build/outputs/apk/release/
+
+      - name: Build TD APK
+        run: |
+          cd android-project/td
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          OUT=$(find app/build/outputs/apk/release -name '*.apk' ! -name '*unsigned*' | head -n1)
+          if [ -z "$OUT" ]; then
+            OUT=$(find app/build/outputs/apk/release -name '*.apk' | head -n1)
+          fi
+          cp "$OUT" app/build/outputs/apk/release/vanillatd.apk
+          ls -la app/build/outputs/apk/release/
+
+      - name: Upload RA APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: vanillara-android-${{ matrix.abi }}
+          path: android-project/ra/app/build/outputs/apk/release/vanillara.apk
+
+      - name: Upload TD APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: vanillatd-android-${{ matrix.abi }}
+          path: android-project/td/app/build/outputs/apk/release/vanillatd.apk
