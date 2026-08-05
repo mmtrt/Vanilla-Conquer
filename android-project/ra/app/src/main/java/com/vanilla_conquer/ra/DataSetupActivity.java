@@ -16,6 +16,7 @@ import android.view.WindowInsets;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.DocumentsContract;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.View;
