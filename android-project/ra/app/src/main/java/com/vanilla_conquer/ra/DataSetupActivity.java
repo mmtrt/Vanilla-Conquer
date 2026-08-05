@@ -113,7 +113,7 @@ public class DataSetupActivity extends Activity {
         if (!forceSetup && hasGameData() && prefs.getBoolean(PREF_SETUP_DONE, false)) {
             // Re-apply flags from what is actually on disk
             syncExpansionFlagsFromDisk();
-            applyDisplayIni("pixel_fill");
+            applyDisplayIni("auto");
             launchGame();
             return;
         }
@@ -258,12 +258,6 @@ public class DataSetupActivity extends Activity {
                 deleteIfExists("expand2.mix");
                 am = false;
             }
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                    .putBoolean(PREF_WANT_CS, cbCS.isChecked())
-                    .putBoolean(PREF_WANT_AM, cbAM.isChecked())
-                    .putBoolean(PREF_SETUP_DONE, true)
-                    .putString(PREF_DISPLAY_MODE, "pixel_fill")
-                    .apply();
             applyExpansionIni(cs, am);
             applyDisplayIni("auto");
             launchGame();
@@ -642,28 +636,46 @@ public class DataSetupActivity extends Activity {
 
     /** Apply video settings. mode="auto" detects optimal integer scale. */
     private void applyDisplayIni(String mode) {
-        int scale;
-        if ("auto".equals(mode) || mode == null || mode.isEmpty()) {
-            scale = calculateOptimalScale();
-        } else {
-            try {
-                scale = Integer.parseInt(mode);
-            } catch (NumberFormatException e) {
-                scale = calculateOptimalScale();
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        int screenW = Math.max(dm.widthPixels, dm.heightPixels);
+        int screenH = Math.min(dm.widthPixels, dm.heightPixels);
+        float screenRatio = (float) screenW / screenH;
+
+        int width, height;
+        boolean boxing;
+        String scaler;
+
+        if ("auto".equals(mode)) {
+            // 16:10 tablet (1.6) → integer scale for perfect pixels
+            // 20:9 phone (2.22) → native res, no stretch, more FOV
+            if (Math.abs(screenRatio - 1.6f) < 0.2f) {
+                // Close to 16:10 — use integer scale
+                int scale = Math.min(screenW / 640, screenH / 400);
+                if (scale < 1) scale = 1;
+                width = 640 * scale;
+                height = 400 * scale;
+                boxing = false;
+                scaler = "nearest";
+                Log.i(TAG, "16:10 detected, using " + scale + "x scale (" + width + "x" + height + ")");
+            } else {
+                // Ultrawide — native resolution, no stretch
+                width = 0;
+                height = 0;
+                boxing = false;
+                scaler = "nearest";
+                Log.i(TAG, "Ultrawide " + screenRatio + " detected, using native resolution");
             }
+        } else {
+            // Manual override
+            width = 0;
+            height = 0;
+            boxing = false;
+            scaler = "nearest";
         }
-
-        int width = BASE_WIDTH * scale;
-        int height = BASE_HEIGHT * scale;
-
-        // Crisp fill: exact integer multiple, nearest-neighbor, fill screen
-        boolean boxing = false;
-        String scaler = "nearest";
 
         try {
             File ini = new File(userDir, "redalert.ini");
             String text = ini.exists() ? new String(readAll(ini), "UTF-8") : "";
-
             text = upsertIni(text, "Video", "Width", String.valueOf(width));
             text = upsertIni(text, "Video", "Height", String.valueOf(height));
             text = upsertIni(text, "Video", "Windowed", "no");
@@ -673,18 +685,13 @@ public class DataSetupActivity extends Activity {
             text = upsertIni(text, "Video", "HardwareCursor", "no");
             text = upsertIni(text, "Video", "FrameLimit", "60");
             text = upsertIni(text, "Video", "DOSMode", "no");
-
             FileOutputStream fos = new FileOutputStream(ini);
             fos.write(text.getBytes("UTF-8"));
             fos.close();
-
-            Log.i(TAG, "Display: scale=" + scale + "x res=" + width + "x" + height
-                    + " boxing=" + boxing + " scaler=" + scaler);
         } catch (Exception e) {
             Log.w(TAG, "display ini", e);
         }
     }
-
 
     private static String upsertIni(String text, String section, String key, String value) {
         String[] lines = text.split("\n", -1);
