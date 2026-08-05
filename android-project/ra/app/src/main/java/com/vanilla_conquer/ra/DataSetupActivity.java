@@ -66,6 +66,9 @@ public class DataSetupActivity extends Activity {
     private static final String PREF_SETUP_DONE = "setup_done";
     /** stretch | fit1610 | fit43 | pixel */
     private static final String PREF_DISPLAY_MODE = "display_mode";
+    private static final int BASE_WIDTH = 640;
+    private static final int BASE_HEIGHT = 400;
+    
 
     private static final String DEMO_PAGE =
             "https://www.moddb.com/games/cc-red-alert/downloads/command-conquer-red-alert-demo";
@@ -262,7 +265,7 @@ public class DataSetupActivity extends Activity {
                     .putString(PREF_DISPLAY_MODE, "pixel_fill")
                     .apply();
             applyExpansionIni(cs, am);
-            applyDisplayIni("pixel_fill");
+            applyDisplayIni("auto");
             launchGame();
         });
         root.addView(btnContinue);
@@ -621,36 +624,67 @@ public class DataSetupActivity extends Activity {
         }
     }
 
+    /** Calculate the largest integer scale of 640×400 that fits the screen in landscape. */
+    private int calculateOptimalScale() {
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        // Game runs landscape: width is the longer edge
+        int screenW = Math.max(dm.widthPixels, dm.heightPixels);
+        int screenH = Math.min(dm.widthPixels, dm.heightPixels);
 
-    /** Write [Video] section for mobile/tablet display mode. */
+        int scale = Math.min(screenW / BASE_WIDTH, screenH / BASE_HEIGHT);
+        if (scale < 1) scale = 1;
+
+        Log.i(TAG, "Display " + screenW + "x" + screenH + " -> using " + scale + "x scale ("
+                + (BASE_WIDTH * scale) + "x" + (BASE_HEIGHT * scale) + ")");
+        return scale;
+    
+    }
+
+    /** Apply video settings. mode="auto" detects optimal integer scale. */
     private void applyDisplayIni(String mode) {
-        // Fixed: pixel scale + fill device (no letterbox)
+        int scale;
+        if ("auto".equals(mode) || mode == null || mode.isEmpty()) {
+            scale = calculateOptimalScale();
+        } else {
+            try {
+                scale = Integer.parseInt(mode);
+            } catch (NumberFormatException e) {
+                scale = calculateOptimalScale();
+            }
+        }
+
+        int width = BASE_WIDTH * scale;
+        int height = BASE_HEIGHT * scale;
+
+        // Crisp fill: exact integer multiple, nearest-neighbor, fill screen
         boolean boxing = false;
-        String aspect = "16:10";
         String scaler = "nearest";
+
         try {
             File ini = new File(userDir, "redalert.ini");
-            String text = "";
-            if (ini.exists()) {
-                text = new String(readAll(ini), "UTF-8");
-            }
-            text = upsertIni(text, "Video", "Width", "0");
-            text = upsertIni(text, "Video", "Height", "0");
+            String text = ini.exists() ? new String(readAll(ini), "UTF-8") : "";
+
+            text = upsertIni(text, "Video", "Width", String.valueOf(width));
+            text = upsertIni(text, "Video", "Height", String.valueOf(height));
             text = upsertIni(text, "Video", "Windowed", "no");
             text = upsertIni(text, "Video", "Boxing", boxing ? "yes" : "no");
-            text = upsertIni(text, "Video", "BoxingAspectRatio", aspect);
+            text = upsertIni(text, "Video", "BoxingAspectRatio", "16:10");
             text = upsertIni(text, "Video", "Scaler", scaler);
             text = upsertIni(text, "Video", "HardwareCursor", "no");
             text = upsertIni(text, "Video", "FrameLimit", "60");
             text = upsertIni(text, "Video", "DOSMode", "no");
+
             FileOutputStream fos = new FileOutputStream(ini);
             fos.write(text.getBytes("UTF-8"));
             fos.close();
-            Log.i(TAG, "Display mode=" + mode + " boxing=" + boxing + " scaler=" + scaler);
+
+            Log.i(TAG, "Display: scale=" + scale + "x res=" + width + "x" + height
+                    + " boxing=" + boxing + " scaler=" + scaler);
         } catch (Exception e) {
             Log.w(TAG, "display ini", e);
         }
     }
+
 
     private static String upsertIni(String text, String section, String key, String value) {
         String[] lines = text.split("\n", -1);
