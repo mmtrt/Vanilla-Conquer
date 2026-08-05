@@ -674,6 +674,15 @@ public class DataSetupActivity extends Activity {
             scaler = "nearest";
         }
 
+            // DEBUG: log what we wrote
+            Log.i(TAG, "=== VIDEO CONFIG ===");
+            Log.i(TAG, "Screen: " + screenW + "x" + screenH + " ratio=" + String.format(Locale.US, "%.2f", screenRatio));
+            Log.i(TAG, "Mode: " + (width == 0 ? "NATIVE" : "INTEGER " + (width/640) + "x"));
+            Log.i(TAG, "Resolution: " + width + "x" + height);
+            Log.i(TAG, "Boxing: " + boxing);
+            Log.i(TAG, "Scaler: " + scaler);
+            Log.i(TAG, "====================");
+
         try {
             File ini = new File(userDir, "redalert.ini");
             String text = ini.exists() ? new String(readAll(ini), "UTF-8") : "";
