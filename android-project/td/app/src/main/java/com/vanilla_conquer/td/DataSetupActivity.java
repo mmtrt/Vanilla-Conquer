@@ -210,20 +210,13 @@ public class DataSetupActivity extends Activity {
         status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         status.setPadding(0, dp(10), 0, dp(10));
         root.addView(status);
-
-
         root.addView(sectionLabel("Resolution"));
         rgResolution = new RadioGroup(this);
         rgResolution.setOrientation(RadioGroup.VERTICAL);
         String resPreset = prefs.getString(PREF_RES_PRESET, "auto");
-        addRadio(rgResolution, "Auto (detect best for this device)", "auto", resPreset);
-        addRadio(rgResolution, "640 × 400 (original)", "640x400", resPreset);
-        addRadio(rgResolution, "Widescreen 400p (aspect-adaptive)", "ws400", resPreset);
-        addRadio(rgResolution, "640 × 480", "640x480", resPreset);
-        addRadio(rgResolution, "800 × 600", "800x600", resPreset);
-        addRadio(rgResolution, "1024 × 768", "1024x768", resPreset);
-        addRadio(rgResolution, "1066 × 480", "1066x480", resPreset);
-        addRadio(rgResolution, "1280 × 720", "1280x720", resPreset);
+        addRadio(rgResolution, "Auto", "auto", resPreset);
+        addRadio(rgResolution, "Original (640 × 400)", "640x400", resPreset);
+        addRadio(rgResolution, "Widescreen 400p", "ws400", resPreset);
         addRadio(rgResolution, "Custom…", "custom", resPreset);
         root.addView(rgResolution);
 
@@ -235,25 +228,26 @@ public class DataSetupActivity extends Activity {
         etCustomW.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
         etCustomW.setTextColor(Color.WHITE);
         etCustomW.setHintTextColor(0xFF888888);
-        etCustomW.setText(String.valueOf(prefs.getInt(PREF_RES_W, 1066) > 0 ? prefs.getInt(PREF_RES_W, 1066) : 1066));
+        int prefW = prefs.getInt(PREF_RES_W, 1066);
+        etCustomW.setText(String.valueOf(prefW > 0 ? prefW : 1066));
         etCustomH = new EditText(this);
         etCustomH.setHint("Height");
         etCustomH.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
         etCustomH.setTextColor(Color.WHITE);
         etCustomH.setHintTextColor(0xFF888888);
-        etCustomH.setText(String.valueOf(prefs.getInt(PREF_RES_H, 480) > 0 ? prefs.getInt(PREF_RES_H, 480) : 480));
+        int prefH = prefs.getInt(PREF_RES_H, 480);
+        etCustomH.setText(String.valueOf(prefH > 0 ? prefH : 480));
         LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         half.setMargins(0, 0, dp(8), 0);
         customRow.addView(etCustomW, half);
         customRow.addView(etCustomH, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         root.addView(customRow);
         TextView customHint = new TextView(this);
-        customHint.setText("Custom is used only when “Custom…” is selected. Engine accepts free Width×Height.");
+        customHint.setText("Custom applies only when Custom… is selected.");
         customHint.setTextColor(0xFF888888);
         customHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         customHint.setPadding(0, 0, 0, dp(12));
         root.addView(customHint);
-
 
         root.addView(sectionLabel("Render mode"));
         rgDisplay = new RadioGroup(this);
@@ -307,23 +301,18 @@ public class DataSetupActivity extends Activity {
             String scaler = selectedTag(rgScaler, "nearest");
             int rw, rh;
             if ("ws400".equals(rp)) {
-                // Issue #989: 400p aspect-adaptive width (Hor+ style buffer size)
                 android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
                 int sw = Math.max(dm.widthPixels, dm.heightPixels);
                 int sh = Math.min(dm.widthPixels, dm.heightPixels);
                 float ar = sw / (float) Math.max(1, sh);
                 rw = Math.round(400f * ar);
-                rw = (rw + 7) & ~7; // 8-pixel align
+                rw = (rw + 7) & ~7;
                 if (rw < 640) rw = 640;
                 if (rw > 2560) rw = 2560;
                 rh = 400;
-            } else if ("640x400".equals(rp)) { rw = 640; rh = 400; }
-            else if ("640x480".equals(rp)) { rw = 640; rh = 480; }
-            else if ("800x600".equals(rp)) { rw = 800; rh = 600; }
-            else if ("1024x768".equals(rp)) { rw = 1024; rh = 768; }
-            else if ("1066x480".equals(rp)) { rw = 1066; rh = 480; }
-            else if ("1280x720".equals(rp)) { rw = 1280; rh = 720; }
-            else if ("custom".equals(rp)) {
+            } else if ("640x400".equals(rp)) {
+                rw = 640; rh = 400;
+            } else if ("custom".equals(rp)) {
                 try { rw = Integer.parseInt(etCustomW.getText().toString().trim()); }
                 catch (Exception e) { rw = 1066; }
                 try { rh = Integer.parseInt(etCustomH.getText().toString().trim()); }
@@ -332,7 +321,9 @@ public class DataSetupActivity extends Activity {
                 if (rh < 200) rh = 200;
                 if (rw > 3840) rw = 3840;
                 if (rh > 2160) rh = 2160;
-            } else { rp = "auto"; rw = -1; rh = -1; }
+            } else {
+                rp = "auto"; rw = -1; rh = -1;
+            }
             getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putBoolean(PREF_WANT_CS, cbCS.isChecked())
                     .putBoolean(PREF_WANT_AM, cbAM.isChecked())
@@ -349,15 +340,6 @@ public class DataSetupActivity extends Activity {
         });
         root.addView(btnContinue);
 
-        Button changeDisp = secondaryBtn("Save display & expansions only");
-        changeDisp.setOnClickListener(v -> {
-            if (!hasGameData()) {
-                android.widget.Toast.makeText(this, "Install game data first", android.widget.Toast.LENGTH_SHORT).show();
-                return;
-            }
-            btnContinue.performClick();
-        });
-        root.addView(changeDisp);
 
         Button reset = secondaryBtn("Clear installed data");
         reset.setOnClickListener(v -> new AlertDialog.Builder(this)
@@ -466,20 +448,16 @@ public class DataSetupActivity extends Activity {
         }
     }
 
-    /** Apply video settings. mode="auto" uses fork device detection. */
     private void applyDisplayIni(String mode) {
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         DisplayMetrics dm = getResources().getDisplayMetrics();
         int screenW = Math.max(dm.widthPixels, dm.heightPixels);
         int screenH = Math.min(dm.widthPixels, dm.heightPixels);
         float screenRatio = (float) screenW / screenH;
-
-        int width;
-        int height;
+        int width, height;
         boolean boxing;
         String scaler = prefs.getString(PREF_RENDER_SCALER, "nearest");
         String render = prefs.getString(PREF_DISPLAY_MODE, "fill");
-
         if ("auto".equals(mode)) {
             // #989-oriented auto:
             // ~16:10 tablets → integer scale of 640×400
@@ -490,7 +468,6 @@ public class DataSetupActivity extends Activity {
                 width = 640 * scale;
                 height = 400 * scale;
                 boxing = false;
-                Log.i(TAG, "auto 16:10 → " + scale + "x (" + width + "x" + height + ")");
             } else {
                 width = Math.round(400f * screenRatio);
                 width = (width + 7) & ~7;
@@ -498,7 +475,6 @@ public class DataSetupActivity extends Activity {
                 if (width > 2560) width = 2560;
                 height = 400;
                 boxing = false;
-                Log.i(TAG, "auto ultrawide " + screenRatio + " → native");
             }
         } else {
             width = prefs.getInt(PREF_RES_W, 1066);
@@ -506,10 +482,7 @@ public class DataSetupActivity extends Activity {
             if (width < 0) width = 1066;
             if (height < 0) height = 480;
             boxing = "letterbox".equals(render);
-            // stretch/fill: no boxing
-            Log.i(TAG, "manual res " + width + "x" + height + " render=" + render);
         }
-
         String aspect = (width > 0 && height > 0) ? (width + ":" + height) : "16:10";
         try {
             File ini = new File(userDir, "conquer.ini");
