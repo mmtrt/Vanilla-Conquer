@@ -65,10 +65,13 @@ public class DataSetupActivity extends Activity {
     private static final String PREF_WANT_CS = "want_cs";
     private static final String PREF_WANT_AM = "want_am";
     private static final String PREF_SETUP_DONE = "setup_done";
-    /** stretch | fit1610 | fit43 | pixel */
+    /** auto | fill | letterbox | stretch */
     private static final String PREF_DISPLAY_MODE = "display_mode";
-    private static final int BASE_WIDTH = 640;
-    private static final int BASE_HEIGHT = 400;
+    private static final String PREF_RENDER_SCALER = "render_scaler";
+    private static final String PREF_RES_W = "res_w";
+    private static final String PREF_RES_H = "res_h";
+    /** auto | 1066x480 | 640x400 | 800x600 | native */
+    private static final String PREF_RES_PRESET = "res_preset";
     
 
     private static final String DEMO_PAGE =
@@ -95,6 +98,8 @@ public class DataSetupActivity extends Activity {
     private Button btnFolder;
     private Button btnContinue;
     private RadioGroup rgDisplay;
+    private RadioGroup rgResolution;
+    private RadioGroup rgScaler;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private volatile boolean busy;
 
@@ -114,7 +119,7 @@ public class DataSetupActivity extends Activity {
         if (!forceSetup && hasGameData() && prefs.getBoolean(PREF_SETUP_DONE, false)) {
             // Re-apply flags from what is actually on disk
             syncExpansionFlagsFromDisk();
-            applyDisplayIni("auto");
+            applyDisplayIniFromPrefs();
             launchGame();
             return;
         }
@@ -149,6 +154,26 @@ public class DataSetupActivity extends Activity {
         root.requestApplyInsets();
         refreshContinueState();
         updateFileStatus();
+    }
+
+
+    private void addRadio(RadioGroup group, String label, String tag, String selected) {
+        RadioButton rb = new RadioButton(this);
+        rb.setText(label);
+        rb.setTextColor(Color.WHITE);
+        rb.setTag(tag);
+        rb.setId(View.generateViewId());
+        group.addView(rb);
+        if (tag.equals(selected)) group.check(rb.getId());
+    }
+
+    private String selectedTag(RadioGroup group, String fallback) {
+        if (group == null) return fallback;
+        int id = group.getCheckedRadioButtonId();
+        if (id == -1) return fallback;
+        View v = group.findViewById(id);
+        if (v == null || v.getTag() == null) return fallback;
+        return String.valueOf(v.getTag());
     }
 
     private View buildUi(SharedPreferences prefs) {
@@ -223,6 +248,43 @@ public class DataSetupActivity extends Activity {
         status.setPadding(0, dp(10), 0, dp(10));
         root.addView(status);
 
+
+        root.addView(sectionLabel("Resolution"));
+        rgResolution = new RadioGroup(this);
+        rgResolution.setOrientation(RadioGroup.VERTICAL);
+        String resPreset = prefs.getString(PREF_RES_PRESET, "auto");
+        addRadio(rgResolution, "Auto (detect best for this device)", "auto", resPreset);
+        addRadio(rgResolution, "1066 × 480", "1066x480", resPreset);
+        addRadio(rgResolution, "640 × 400 (classic)", "640x400", resPreset);
+        addRadio(rgResolution, "800 × 600", "800x600", resPreset);
+        addRadio(rgResolution, "Native device (0 × 0)", "native", resPreset);
+        root.addView(rgResolution);
+
+        root.addView(sectionLabel("Render mode"));
+        rgDisplay = new RadioGroup(this);
+        rgDisplay.setOrientation(RadioGroup.VERTICAL);
+        String disp = prefs.getString(PREF_DISPLAY_MODE, "fill");
+        addRadio(rgDisplay, "Fill screen (no letterbox)", "fill", disp);
+        addRadio(rgDisplay, "Letterbox (keep aspect)", "letterbox", disp);
+        addRadio(rgDisplay, "Stretch", "stretch", disp);
+        root.addView(rgDisplay);
+
+        root.addView(sectionLabel("Scaler"));
+        rgScaler = new RadioGroup(this);
+        rgScaler.setOrientation(RadioGroup.VERTICAL);
+        String sc = prefs.getString(PREF_RENDER_SCALER, "nearest");
+        addRadio(rgScaler, "Nearest (sharp pixels)", "nearest", sc);
+        addRadio(rgScaler, "Linear (smooth)", "linear", sc);
+        root.addView(rgScaler);
+
+        TextView vidHint = new TextView(this);
+        vidHint.setText("Auto matches the fork: 16:10 tablets get integer-scaled 640×400; "
+                + "ultrawide phones use native resolution. Letterbox remaps taps to the picture area.");
+        vidHint.setTextColor(0xFF888888);
+        vidHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        vidHint.setPadding(0, dp(4), 0, dp(16));
+        root.addView(vidHint);
+
         root.addView(sectionLabel("Community Map Packs"));
         Button btnMaps = secondaryBtn("Browse & install map packs");
         btnMaps.setOnClickListener(v ->
@@ -259,8 +321,27 @@ public class DataSetupActivity extends Activity {
                 deleteIfExists("expand2.mix");
                 am = false;
             }
+            String rp = selectedTag(rgResolution, "auto");
+            String mode = selectedTag(rgDisplay, "fill");
+            String scaler = selectedTag(rgScaler, "nearest");
+            int rw, rh;
+            if ("1066x480".equals(rp)) { rw = 1066; rh = 480; }
+            else if ("640x400".equals(rp)) { rw = 640; rh = 400; }
+            else if ("800x600".equals(rp)) { rw = 800; rh = 600; }
+            else if ("native".equals(rp)) { rw = 0; rh = 0; }
+            else { rp = "auto"; rw = -1; rh = -1; }
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(PREF_WANT_CS, cbCS.isChecked())
+                    .putBoolean(PREF_WANT_AM, cbAM.isChecked())
+                    .putBoolean(PREF_SETUP_DONE, true)
+                    .putString(PREF_RES_PRESET, rp)
+                    .putString(PREF_DISPLAY_MODE, mode)
+                    .putString(PREF_RENDER_SCALER, scaler)
+                    .putInt(PREF_RES_W, rw)
+                    .putInt(PREF_RES_H, rh)
+                    .apply();
             applyExpansionIni(cs, am);
-            applyDisplayIni("auto");
+            applyDisplayIniFromPrefs();
             launchGame();
         });
         root.addView(btnContinue);
@@ -619,70 +700,56 @@ public class DataSetupActivity extends Activity {
         }
     }
 
-    /** Calculate the largest integer scale of 640×400 that fits the screen in landscape. */
-    private int calculateOptimalScale() {
-        DisplayMetrics dm = getResources().getDisplayMetrics();
-        // Game runs landscape: width is the longer edge
-        int screenW = Math.max(dm.widthPixels, dm.heightPixels);
-        int screenH = Math.min(dm.widthPixels, dm.heightPixels);
-
-        int scale = Math.min(screenW / BASE_WIDTH, screenH / BASE_HEIGHT);
-        if (scale < 1) scale = 1;
-
-        Log.i(TAG, "Display " + screenW + "x" + screenH + " -> using " + scale + "x scale ("
-                + (BASE_WIDTH * scale) + "x" + (BASE_HEIGHT * scale) + ")");
-        return scale;
-    
+    private void applyDisplayIniFromPrefs() {
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        String preset = prefs.getString(PREF_RES_PRESET, "auto");
+        if ("auto".equals(preset) || prefs.getInt(PREF_RES_W, -1) < 0) {
+            applyDisplayIni("auto");
+        } else {
+            applyDisplayIni(prefs.getString(PREF_DISPLAY_MODE, "fill"));
+        }
     }
 
-    /** Apply video settings. mode="auto" detects optimal integer scale. */
+    /** Apply video settings. mode="auto" uses fork device detection. */
     private void applyDisplayIni(String mode) {
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         DisplayMetrics dm = getResources().getDisplayMetrics();
         int screenW = Math.max(dm.widthPixels, dm.heightPixels);
         int screenH = Math.min(dm.widthPixels, dm.heightPixels);
         float screenRatio = (float) screenW / screenH;
 
-        int width, height;
+        int width;
+        int height;
         boolean boxing;
-        String scaler;
+        String scaler = prefs.getString(PREF_RENDER_SCALER, "nearest");
+        String render = prefs.getString(PREF_DISPLAY_MODE, "fill");
 
         if ("auto".equals(mode)) {
-            // 16:10 tablet (1.6) → integer scale for perfect pixels
-            // 20:9 phone (2.22) → native res, no stretch, more FOV
+            // Fork logic: 16:10 → integer scale of 640×400; else native
             if (Math.abs(screenRatio - 1.6f) < 0.2f) {
-                // Close to 16:10 — use integer scale
                 int scale = Math.min(screenW / 640, screenH / 400);
                 if (scale < 1) scale = 1;
                 width = 640 * scale;
                 height = 400 * scale;
                 boxing = false;
-                scaler = "nearest";
-                Log.i(TAG, "16:10 detected, using " + scale + "x scale (" + width + "x" + height + ")");
+                Log.i(TAG, "auto 16:10 → " + scale + "x (" + width + "x" + height + ")");
             } else {
-                // Ultrawide — native resolution, no stretch
                 width = 0;
                 height = 0;
                 boxing = false;
-                scaler = "nearest";
-                Log.i(TAG, "Ultrawide " + screenRatio + " detected, using native resolution");
+                Log.i(TAG, "auto ultrawide " + screenRatio + " → native");
             }
         } else {
-            // Manual override
-            width = 0;
-            height = 0;
-            boxing = false;
-            scaler = "nearest";
+            width = prefs.getInt(PREF_RES_W, 1066);
+            height = prefs.getInt(PREF_RES_H, 480);
+            if (width < 0) width = 1066;
+            if (height < 0) height = 480;
+            boxing = "letterbox".equals(render);
+            // stretch/fill: no boxing
+            Log.i(TAG, "manual res " + width + "x" + height + " render=" + render);
         }
 
-            // DEBUG: log what we wrote
-            Log.i(TAG, "=== VIDEO CONFIG ===");
-            Log.i(TAG, "Screen: " + screenW + "x" + screenH + " ratio=" + String.format(Locale.US, "%.2f", screenRatio));
-            Log.i(TAG, "Mode: " + (width == 0 ? "NATIVE" : "INTEGER " + (width/640) + "x"));
-            Log.i(TAG, "Resolution: " + width + "x" + height);
-            Log.i(TAG, "Boxing: " + boxing);
-            Log.i(TAG, "Scaler: " + scaler);
-            Log.i(TAG, "====================");
-
+        String aspect = (width > 0 && height > 0) ? (width + ":" + height) : "16:10";
         try {
             File ini = new File(userDir, "redalert.ini");
             String text = ini.exists() ? new String(readAll(ini), "UTF-8") : "";
@@ -690,11 +757,12 @@ public class DataSetupActivity extends Activity {
             text = upsertIni(text, "Video", "Height", String.valueOf(height));
             text = upsertIni(text, "Video", "Windowed", "no");
             text = upsertIni(text, "Video", "Boxing", boxing ? "yes" : "no");
-            text = upsertIni(text, "Video", "BoxingAspectRatio", "16:10");
+            text = upsertIni(text, "Video", "BoxingAspectRatio", aspect);
             text = upsertIni(text, "Video", "Scaler", scaler);
             text = upsertIni(text, "Video", "HardwareCursor", "no");
             text = upsertIni(text, "Video", "FrameLimit", "60");
             text = upsertIni(text, "Video", "DOSMode", "no");
+            text = upsertIni(text, "Mouse", "RawInput", "no");
             FileOutputStream fos = new FileOutputStream(ini);
             fos.write(text.getBytes("UTF-8"));
             fos.close();
@@ -954,4 +1022,3 @@ public class DataSetupActivity extends Activity {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
 }
-

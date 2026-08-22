@@ -1,6 +1,7 @@
 package com.vanilla_conquer.ra;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.view.WindowManager;
 import android.os.Build;
 import android.provider.Settings;
@@ -302,26 +303,53 @@ public class VanillaRAActivity extends SDLActivity {
         return b;
     }
 
-    /** Absolute mouse — window pixel coords (SDL_androidmouse.c). */
+    private float[] mapTouch(float x, float y) {
+        View surf = mSurface;
+        int sw = (surf != null && surf.getWidth() > 0) ? surf.getWidth() : 1;
+        int sh = (surf != null && surf.getHeight() > 0) ? surf.getHeight() : 1;
+        SharedPreferences prefs = getSharedPreferences("vanilla_ra", MODE_PRIVATE);
+        String mode = prefs.getString("display_mode", "fill");
+        int gw = prefs.getInt("res_w", -1);
+        int gh = prefs.getInt("res_h", -1);
+        if (!"letterbox".equals(mode) || gw <= 0 || gh <= 0) {
+            return new float[]{x, y};
+        }
+        float scale = Math.min(sw / (float) gw, sh / (float) gh);
+        float cw = Math.max(1f, gw * scale);
+        float ch = Math.max(1f, gh * scale);
+        float left = (sw - cw) * 0.5f;
+        float top = (sh - ch) * 0.5f;
+        float lx = (x - left) / cw;
+        float ly = (y - top) / ch;
+        if (lx < 0f) lx = 0f; else if (lx > 1f) lx = 1f;
+        if (ly < 0f) ly = 0f; else if (ly > 1f) ly = 1f;
+        return new float[]{lx * sw, ly * sh};
+    }
+
     void absMove(float x, float y) {
-        SDLActivity.onNativeMouse(0, MotionEvent.ACTION_MOVE, x, y, false);
+        float[] m = mapTouch(x, y);
+        SDLActivity.onNativeMouse(0, MotionEvent.ACTION_MOVE, m[0], m[1], false);
     }
 
     void leftDown(float x, float y) {
-        SDLActivity.onNativeMouse(0, MotionEvent.ACTION_MOVE, x, y, false);
-        SDLActivity.onNativeMouse(1, MotionEvent.ACTION_DOWN, x, y, false);
+        float[] m = mapTouch(x, y);
+        SDLActivity.onNativeMouse(0, MotionEvent.ACTION_MOVE, m[0], m[1], false);
+        SDLActivity.onNativeMouse(1, MotionEvent.ACTION_DOWN, m[0], m[1], false);
     }
 
     void leftUp(float x, float y) {
-        SDLActivity.onNativeMouse(0, MotionEvent.ACTION_MOVE, x, y, false);
-        SDLActivity.onNativeMouse(1, MotionEvent.ACTION_UP, x, y, false);
+        float[] m = mapTouch(x, y);
+        SDLActivity.onNativeMouse(0, MotionEvent.ACTION_MOVE, m[0], m[1], false);
+        SDLActivity.onNativeMouse(1, MotionEvent.ACTION_UP, m[0], m[1], false);
     }
 
     void rightClick(float x, float y) {
-        SDLActivity.onNativeMouse(0, MotionEvent.ACTION_MOVE, x, y, false);
-        SDLActivity.onNativeMouse(2, MotionEvent.ACTION_DOWN, x, y, false);
+        float[] m = mapTouch(x, y);
+        SDLActivity.onNativeMouse(0, MotionEvent.ACTION_MOVE, m[0], m[1], false);
+        SDLActivity.onNativeMouse(2, MotionEvent.ACTION_DOWN, m[0], m[1], false);
+        final float mx = m[0], my = m[1];
         handler.postDelayed(() ->
-                SDLActivity.onNativeMouse(2, MotionEvent.ACTION_UP, x, y, false), 40);
+                SDLActivity.onNativeMouse(2, MotionEvent.ACTION_UP, mx, my, false), 40);
     }
 
     void leftClick(float x, float y) {
@@ -852,15 +880,22 @@ public class VanillaRAActivity extends SDLActivity {
             text = upsertSectionKey(text, "Mouse", "RawInput", "no");
             text = upsertSectionKey(text, "Mouse", "Sensitivity", "100");
 
-            // Pixel scale + fill device screen (no letterbox)
-            boolean boxing = false;
-            String aspect = "16:10";
-            String scaler = "nearest";
-            text = upsertSectionKey(text, "Video", "Width", "0");
-            text = upsertSectionKey(text, "Video", "Height", "0");
+            // Prefer ini already written by DataSetup (auto / manual).
+            // Only fill missing defaults if section empty.
+            SharedPreferences prefs = getSharedPreferences("vanilla_ra", MODE_PRIVATE);
+            String mode = prefs.getString("display_mode", "fill");
+            String scaler = prefs.getString("render_scaler", "nearest");
+            int rw = prefs.getInt("res_w", -1);
+            int rh = prefs.getInt("res_h", -1);
+            boolean boxing = "letterbox".equals(mode);
+            if (rw >= 0 && rh >= 0) {
+                String aspect = (rw > 0 && rh > 0) ? (rw + ":" + rh) : "16:10";
+                text = upsertSectionKey(text, "Video", "Width", String.valueOf(rw));
+                text = upsertSectionKey(text, "Video", "Height", String.valueOf(rh));
+                text = upsertSectionKey(text, "Video", "Boxing", boxing ? "yes" : "no");
+                text = upsertSectionKey(text, "Video", "BoxingAspectRatio", aspect);
+            }
             text = upsertSectionKey(text, "Video", "Windowed", "no");
-            text = upsertSectionKey(text, "Video", "Boxing", boxing ? "yes" : "no");
-            text = upsertSectionKey(text, "Video", "BoxingAspectRatio", aspect);
             text = upsertSectionKey(text, "Video", "Scaler", scaler);
             text = upsertSectionKey(text, "Video", "HardwareCursor", "no");
             text = upsertSectionKey(text, "Video", "FrameLimit", "60");
