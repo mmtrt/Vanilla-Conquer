@@ -60,7 +60,8 @@ public class DataSetupActivity extends Activity {
     private static final String PREF_RES_H = "res_h";
     /** auto | 1066x480 | 640x400 | 800x600 | native */
     private static final String PREF_RES_PRESET = "res_preset";
-    
+    /** square | nonsquare — Video.BoxingAspectRatio 16:10 vs 4:3 */
+    private static final String PREF_PIXEL_ASPECT = "pixel_aspect"; // auto|1066x480|...
 
     private static final String DEMO_PAGE =
             "https://cncnet.org/command-and-conquer";
@@ -88,6 +89,7 @@ public class DataSetupActivity extends Activity {
     private RadioGroup rgDisplay;
     private RadioGroup rgResolution;
     private RadioGroup rgScaler;
+    private RadioGroup rgPixelAspect;
     private EditText etCustomW;
     private EditText etCustomH;
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -249,6 +251,22 @@ public class DataSetupActivity extends Activity {
         customHint.setPadding(0, 0, 0, dp(12));
         root.addView(customHint);
 
+        
+        root.addView(sectionLabel("Pixel aspect"));
+        rgPixelAspect = new RadioGroup(this);
+        rgPixelAspect.setOrientation(RadioGroup.VERTICAL);
+        String px = prefs.getString(PREF_PIXEL_ASPECT, "square");
+        addRadio(rgPixelAspect, "Square pixels (16:10 — Windows-style)", "square", px);
+        addRadio(rgPixelAspect, "Non-square / DOS CRT (4:3 stretch)", "nonsquare", px);
+        root.addView(rgPixelAspect);
+        TextView pxHint = new TextView(this);
+        pxHint.setText("Non-square matches classic CRT (640×400 drawn as 4:3). "
+                + "Takes effect with Letterbox; Fill ignores aspect bars. Supported on all phones via engine BoxingAspectRatio.");
+        pxHint.setTextColor(0xFF888888);
+        pxHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        pxHint.setPadding(0, dp(4), 0, dp(12));
+        root.addView(pxHint);
+
         root.addView(sectionLabel("Render mode"));
         rgDisplay = new RadioGroup(this);
         rgDisplay.setOrientation(RadioGroup.VERTICAL);
@@ -331,6 +349,7 @@ public class DataSetupActivity extends Activity {
                     .putString(PREF_RES_PRESET, rp)
                     .putString(PREF_DISPLAY_MODE, mode)
                     .putString(PREF_RENDER_SCALER, scaler)
+                    .putString(PREF_PIXEL_ASPECT, selectedTag(rgPixelAspect, "square"))
                     .putInt(PREF_RES_W, rw)
                     .putInt(PREF_RES_H, rh)
                     .apply();
@@ -340,6 +359,15 @@ public class DataSetupActivity extends Activity {
         });
         root.addView(btnContinue);
 
+        Button changeDisp = secondaryBtn("Save display & expansions only");
+        changeDisp.setOnClickListener(v -> {
+            if (!hasGameData()) {
+                android.widget.Toast.makeText(this, "Install game data first", android.widget.Toast.LENGTH_SHORT).show();
+                return;
+            }
+            btnContinue.performClick();
+        });
+        root.addView(changeDisp);
 
         Button reset = secondaryBtn("Clear installed data");
         reset.setOnClickListener(v -> new AlertDialog.Builder(this)
@@ -457,6 +485,9 @@ public class DataSetupActivity extends Activity {
         int width, height;
         boolean boxing;
         String scaler = prefs.getString(PREF_RENDER_SCALER, "nearest");
+        String pixelAspect = prefs.getString(PREF_PIXEL_ASPECT, "square");
+        // Square: 16:10 (native 640×400). Non-square DOS CRT: 4:3.
+        String boxAr = "nonsquare".equals(pixelAspect) ? "4:3" : "16:10";
         String render = prefs.getString(PREF_DISPLAY_MODE, "fill");
         if ("auto".equals(mode)) {
             // #989-oriented auto:
@@ -483,7 +514,12 @@ public class DataSetupActivity extends Activity {
             if (height < 0) height = 480;
             boxing = "letterbox".equals(render);
         }
-        String aspect = (width > 0 && height > 0) ? (width + ":" + height) : "16:10";
+        // Non-square CRT aspect only applies when the engine letterboxes (Boxing=yes).
+        if ("nonsquare".equals(pixelAspect)) {
+            boxing = true;
+        }
+        String aspect = boxAr;
+        // Optional: when square and fixed res, could use width:height; boxAr is the CRT switch.
         try {
             File ini = new File(userDir, "conquer.ini");
             String text = ini.exists() ? new String(readAll(ini), "UTF-8") : "";
@@ -495,7 +531,7 @@ public class DataSetupActivity extends Activity {
             text = upsertIni(text, "Video", "Scaler", scaler);
             text = upsertIni(text, "Video", "HardwareCursor", "no");
             text = upsertIni(text, "Video", "FrameLimit", "60");
-            text = upsertIni(text, "Video", "DOSMode", "no");
+            text = upsertIni(text, "Video", "DOSMode", "nonsquare".equals(pixelAspect) ? "yes" : "no");
             text = upsertIni(text, "Mouse", "RawInput", "no");
             FileOutputStream fos = new FileOutputStream(ini);
             fos.write(text.getBytes("UTF-8"));
