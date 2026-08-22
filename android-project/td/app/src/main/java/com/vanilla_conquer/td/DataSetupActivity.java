@@ -218,6 +218,7 @@ public class DataSetupActivity extends Activity {
         String resPreset = prefs.getString(PREF_RES_PRESET, "auto");
         addRadio(rgResolution, "Auto (detect best for this device)", "auto", resPreset);
         addRadio(rgResolution, "640 × 400 (original)", "640x400", resPreset);
+        addRadio(rgResolution, "Widescreen 400p (aspect-adaptive)", "ws400", resPreset);
         addRadio(rgResolution, "640 × 480", "640x480", resPreset);
         addRadio(rgResolution, "800 × 600", "800x600", resPreset);
         addRadio(rgResolution, "1024 × 768", "1024x768", resPreset);
@@ -305,7 +306,18 @@ public class DataSetupActivity extends Activity {
             String mode = selectedTag(rgDisplay, "fill");
             String scaler = selectedTag(rgScaler, "nearest");
             int rw, rh;
-            if ("640x400".equals(rp)) { rw = 640; rh = 400; }
+            if ("ws400".equals(rp)) {
+                // Issue #989: 400p aspect-adaptive width (Hor+ style buffer size)
+                android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+                int sw = Math.max(dm.widthPixels, dm.heightPixels);
+                int sh = Math.min(dm.widthPixels, dm.heightPixels);
+                float ar = sw / (float) Math.max(1, sh);
+                rw = Math.round(400f * ar);
+                rw = (rw + 7) & ~7; // 8-pixel align
+                if (rw < 640) rw = 640;
+                if (rw > 2560) rw = 2560;
+                rh = 400;
+            } else if ("640x400".equals(rp)) { rw = 640; rh = 400; }
             else if ("640x480".equals(rp)) { rw = 640; rh = 480; }
             else if ("800x600".equals(rp)) { rw = 800; rh = 600; }
             else if ("1024x768".equals(rp)) { rw = 1024; rh = 768; }
@@ -469,8 +481,10 @@ public class DataSetupActivity extends Activity {
         String render = prefs.getString(PREF_DISPLAY_MODE, "fill");
 
         if ("auto".equals(mode)) {
-            // Fork logic: 16:10 → integer scale of 640×400; else native
-            if (Math.abs(screenRatio - 1.6f) < 0.2f) {
+            // #989-oriented auto:
+            // ~16:10 tablets → integer scale of 640×400
+            // wider phones → 400p aspect-adaptive width (see more map horizontally)
+            if (Math.abs(screenRatio - 1.6f) < 0.15f) {
                 int scale = Math.min(screenW / 640, screenH / 400);
                 if (scale < 1) scale = 1;
                 width = 640 * scale;
@@ -478,8 +492,11 @@ public class DataSetupActivity extends Activity {
                 boxing = false;
                 Log.i(TAG, "auto 16:10 → " + scale + "x (" + width + "x" + height + ")");
             } else {
-                width = 0;
-                height = 0;
+                width = Math.round(400f * screenRatio);
+                width = (width + 7) & ~7;
+                if (width < 640) width = 640;
+                if (width > 2560) width = 2560;
+                height = 400;
                 boxing = false;
                 Log.i(TAG, "auto ultrawide " + screenRatio + " → native");
             }
